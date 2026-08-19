@@ -1,227 +1,128 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import * as d3 from 'd3'
-import KpiStrip from './components/KpiStrip.vue'
-import RevenueTimeline from './components/RevenueTimeline.vue'
+import RevenueChart from './components/RevenueChart.vue'
+import ManagerTable from './components/ManagerTable.vue'
 import ApartmentMatrix from './components/ApartmentMatrix.vue'
-import ManagerChart from './components/ManagerChart.vue'
-import FeatureAnalysis from './components/FeatureAnalysis.vue'
-import RemainingInventory from './components/RemainingInventory.vue'
-import { loadApartments, formatMoney, formatPct } from './utils/data'
+import LiquidityGrid from './components/LiquidityGrid.vue'
+import { loadApartments, factorDefs, moneyMln } from './utils/data'
 
-const apartments = ref([])
-const loading = ref(true)
-const error = ref('')
-const selectedApartment = ref(null)
-const factor = ref('view')
-const timelinePeriod = ref('week')
+const apartments=ref([]), loading=ref(true), error=ref('')
+const period=ref('week')
+const matrixFactor=ref('rooms')
+const liquidityMode=ref('count')
+const selectedApartment=ref(null)
+const filters=ref({building:'Все',rooms:'Все',manager:'Все',status:'Все',view:'Все'})
 
-const filters = ref({
-  building: 'Все',
-  rooms: 'Все',
-  manager: 'Все',
-  status: 'Все',
-  view: 'Все',
-  featureFactor: null,
-  featureValue: null
+onMounted(async()=>{
+  try{apartments.value=await loadApartments()}catch(e){console.error(e);error.value='Не удалось загрузить данные'}finally{loading.value=false}
 })
-
-onMounted(async () => {
-  try {
-    apartments.value = await loadApartments()
-  } catch (e) {
-    console.error(e)
-    error.value = 'Не удалось загрузить apartments.csv'
-  } finally {
-    loading.value = false
-  }
-})
-
-const buildings = computed(() => ['Все', ...new Set(apartments.value.map(d => d.building))])
-const managers = computed(() => ['Все', ...new Set(apartments.value.filter(d => d.manager).map(d => d.manager))])
-const views = computed(() => ['Все', ...new Set(apartments.value.map(d => d.view))])
-
-function matchesFeature(d) {
-  if (!filters.value.featureFactor || filters.value.featureValue == null) return true
-  const f = filters.value.featureFactor
-  const v = filters.value.featureValue
-  if (f === 'building') return d.building === v
-  if (f === 'rooms') return String(d.rooms) === v
-  if (f === 'view') return d.view === v
-  if (f === 'layout') return d.layout === v
-  if (f === 'floor') {
-    return String(d.floor) === v
-  }
-  if (f === 'area') {
-    const band = d.area < 40 ? 'до 40 м²' : d.area < 55 ? '40–55 м²' : d.area < 70 ? '55–70 м²' : '70+ м²'
-    return band === v
-  }
-  if (f === 'price') {
-    const band = d.listPrice < 2e6 ? 'до 2 млн' : d.listPrice < 3e6 ? '2–3 млн' : d.listPrice < 4e6 ? '3–4 млн' : d.listPrice < 5e6 ? '4–5 млн' : d.listPrice < 10e6 ? '5–10 млн' : '10+ млн'
-    return band === v
-  }
+const uniq=fn=>['Все',...new Set(apartments.value.map(fn).filter(Boolean))]
+const buildings=computed(()=>uniq(d=>d.building))
+const managers=computed(()=>uniq(d=>d.manager))
+const views=computed(()=>uniq(d=>d.view))
+const filtered=computed(()=>apartments.value.filter(d=>{
+  if(filters.value.building!=='Все'&&d.building!==filters.value.building)return false
+  if(filters.value.rooms!=='Все'&&d.rooms!==+filters.value.rooms)return false
+  if(filters.value.manager!=='Все'&&d.manager!==filters.value.manager)return false
+  if(filters.value.status==='Проданы'&&!d.sold)return false
+  if(filters.value.status==='В продаже'&&d.sold)return false
+  if(filters.value.view!=='Все'&&d.view!==filters.value.view)return false
   return true
-}
-
-const filtered = computed(() => apartments.value.filter(d => {
-  if (filters.value.building !== 'Все' && d.building !== filters.value.building) return false
-  if (filters.value.rooms !== 'Все' && d.rooms !== +filters.value.rooms) return false
-  if (filters.value.manager !== 'Все' && d.manager !== filters.value.manager) return false
-  if (filters.value.status === 'Проданы' && !d.sold) return false
-  if (filters.value.status === 'В продаже' && d.sold) return false
-  if (filters.value.view !== 'Все' && d.view !== filters.value.view) return false
-  return matchesFeature(d)
 }))
-
-const stats = computed(() => {
-  const total = filtered.value.length
-  const soldRows = filtered.value.filter(d => d.sold)
-  const sold = soldRows.length
-  const revenue = d3.sum(soldRows, d => d.salePrice || 0)
-  const discount = d3.sum(soldRows, d => d.discount || 0)
-  const list = d3.sum(soldRows, d => (d.salePrice || 0) + (d.discount || 0))
+const stats=computed(()=>{
+  const sold=filtered.value.filter(d=>d.sold), unsold=filtered.value.filter(d=>!d.sold)
+  const worked=sold.filter(d=>Number.isFinite(d.daysInWork))
   return {
-    total,
-    sold,
-    sellThrough: total ? formatPct(sold / total) : '—',
-    revenue: formatMoney(revenue),
-    discount: formatMoney(discount),
-    discountShare: list ? formatPct(discount / list) : '—',
-    avgDays: soldRows.length ? d3.mean(soldRows, d => d.daysInWork || 0).toFixed(1) : '—'
+    sold:sold.length,total:filtered.value.length,
+    revenue:d3.sum(sold,d=>d.salePrice||0),
+    left:unsold.length,potential:d3.sum(unsold,d=>d.listPrice||0),
+    discount:d3.sum(sold,d=>d.discount||0),
+    avgDays:worked.length?d3.mean(worked,d=>d.daysInWork):null
   }
 })
-
-function resetFilters() {
-  filters.value = { building: 'Все', rooms: 'Все', manager: 'Все', status: 'Все', view: 'Все', featureFactor: null, featureValue: null }
-  selectedApartment.value = null
+function reset(){
+  filters.value={building:'Все',rooms:'Все',manager:'Все',status:'Все',view:'Все'}
+  selectedApartment.value=null
 }
-
-function selectManager(name) {
-  filters.value.manager = filters.value.manager === name ? 'Все' : name
-}
-
-function selectFeature(payload) {
-  if (filters.value.featureFactor === payload.factor && filters.value.featureValue === payload.value) {
-    filters.value.featureFactor = null
-    filters.value.featureValue = null
-  } else {
-    filters.value.featureFactor = payload.factor
-    filters.value.featureValue = payload.value
-  }
-}
-
-function selectTimelinePeriod({ start, end }) {
-  const match = filtered.value.filter(d => d.dealDate && d.dealDate >= start && d.dealDate < end)
-  if (match.length) selectedApartment.value = match[0]
-}
-
-const timelineTitle = computed(() => ({
-  day: 'Выручка и сделки по дням',
-  week: 'Выручка и сделки по неделям',
-  month: 'Выручка и сделки по месяцам'
-})[timelinePeriod.value])
-
-
+function selectManager(name){filters.value.manager=filters.value.manager===name?'Все':name}
+function selectApartment(d){selectedApartment.value=selectedApartment.value?.id===d.id?null:d}
 </script>
 
 <template>
-  <main class="page">
-    <header class="hero">
-      <div>
-        <p class="eyebrow">ЖК «Облепиха» · Новосибирск</p>
-        <h1>Продажи квартир в ЖК «Облепиха»</h1>
+  <div class="dashboard-shell">
+    <header class="dashboard-header">
+      <div class="header-top">
+        <div class="brand">
+          <h1>ЖК «Облепиха»</h1>
+          <p>Новосибирск, ул. Сиреневая, д. 1</p>
+        </div>
+        <section class="kpi-strip" aria-label="Общая информация">
+          <div class="kpi kpi-green"><b>{{stats.sold}} <em>из {{stats.total}}</em></b><span>продано квартир</span></div>
+          <div class="kpi kpi-green"><b>{{moneyMln(stats.revenue)}}</b><span>получено выручки</span></div>
+          <div class="kpi kpi-blue"><b>{{stats.left}}</b><span>квартир осталось</span></div>
+          <div class="kpi kpi-blue"><b>{{moneyMln(stats.potential)}}</b><span>ожидаемая выручка</span></div>
+          <div class="kpi kpi-orange"><b>{{moneyMln(stats.discount,1)}}</b><span>скидок по сделкам</span></div>
+          <div class="kpi kpi-purple"><b>{{stats.avgDays == null ? '—' : stats.avgDays.toLocaleString('ru-RU',{maximumFractionDigits:1}) + ' дн.'}}</b><span>средний срок сделки</span></div>
+        </section>
       </div>
-      <button class="reset" @click="resetFilters">Сбросить фильтры</button>
+      <div class="filters">
+        <label><span>корпус</span><select v-model="filters.building"><option v-for="v in buildings" :key="v">{{v}}</option></select></label>
+        <label><span>комнат</span><select v-model="filters.rooms"><option>Все</option><option>1</option><option>2</option><option>3</option></select></label>
+        <label><span>менеджер</span><select v-model="filters.manager"><option v-for="v in managers" :key="v">{{v}}</option></select></label>
+        <label><span>статус</span><select v-model="filters.status"><option>Все</option><option>Проданы</option><option>В продаже</option></select></label>
+        <label><span>вид</span><select v-model="filters.view"><option v-for="v in views" :key="v">{{v}}</option></select></label>
+        <button class="reset" @click="reset">Сбросить фильтры</button>
+      </div>
     </header>
 
-    <p v-if="loading" class="state">Загружаю данные…</p>
-    <p v-else-if="error" class="state error">{{ error }}</p>
-
+    <div v-if="loading" class="state">Загружаю данные…</div>
+    <div v-else-if="error" class="state">{{error}}</div>
     <template v-else>
-      <section class="filters card">
-        <label>Корпус<select v-model="filters.building"><option v-for="v in buildings" :key="v">{{ v }}</option></select></label>
-        <label>Комнат<select v-model="filters.rooms"><option>Все</option><option>1</option><option>2</option><option>3</option></select></label>
-        <label>Менеджер<select v-model="filters.manager"><option v-for="v in managers" :key="v">{{ v }}</option></select></label>
-        <label>Статус<select v-model="filters.status"><option>Все</option><option>Проданы</option><option>В продаже</option></select></label>
-        <label>Вид<select v-model="filters.view"><option v-for="v in views" :key="v">{{ v }}</option></select></label>
-        <div v-if="filters.featureValue" class="active-filter">{{ filters.featureValue }} <button @click="filters.featureFactor=null; filters.featureValue=null">×</button></div>
-      </section>
-
-      <KpiStrip :stats="stats" />
-
-      <section class="card section-card">
-        <div class="section-head">
-          <div class="timeline-heading">
-            <p class="section-no">01 · Динамика</p>
-            <h2>{{ timelineTitle }}</h2>
-            <p class="timeline-legend">Выручка, млн ₽ — линия · сделки — столбцы</p>
-          </div>
-          <div class="timeline-controls">
-            <div class="period-switch" aria-label="Период агрегации">
-              <button :class="{ active: timelinePeriod === 'day' }" @click="timelinePeriod='day'">Дни</button>
-              <button :class="{ active: timelinePeriod === 'week' }" @click="timelinePeriod='week'">Недели</button>
-              <button :class="{ active: timelinePeriod === 'month' }" @click="timelinePeriod='month'">Месяцы</button>
+      <main class="dashboard-grid">
+        <section class="panel revenue-panel">
+          <div class="panel-heading">
+            <div><h2>Выручка и сделки</h2><p>линия — выручка · столбцы — сделки</p></div>
+            <div class="segmented">
+              <button :class="{active:period==='day'}" @click="period='day'">дни</button>
+              <button :class="{active:period==='week'}" @click="period='week'">недели</button>
+              <button :class="{active:period==='month'}" @click="period='month'">месяцы</button>
             </div>
-            <p class="section-note">Данные заканчиваются 25.08 — последний период может быть неполным.</p>
           </div>
-        </div>
-        <RevenueTimeline :data="filtered" :period="timelinePeriod" @select-period="selectTimelinePeriod" />
-      </section>
-
-      <section class="card section-card">
-        <div class="section-head compact">
-          <div>
-            <p class="section-no">02 · Остаток и потенциал</p>
-            <h2>Сколько квартир осталось и сколько они могут дать выручки</h2>
-          </div>
-        </div>
-        <p class="chart-hint inventory-hint">По текущей цене квартир в продаже. Слева — количество, справа — ожидаемая выручка.</p>
-        <RemainingInventory :data="filtered" />
-      </section>
-
-      <section class="card section-card">
-        <div class="section-head">
-          <div><p class="section-no">03 · Квартиры</p><h2>Все квартиры объекта</h2></div>
-          <div class="legend"><span><i class="sold-dot"></i> продана</span><span><i class="unsold-dot"></i> в продаже</span></div>
-        </div>
-        <ApartmentMatrix :data="filtered" :selected-id="selectedApartment?.id" @select-apartment="selectedApartment=$event" />
-        <div v-if="selectedApartment" class="detail">
-          <strong>{{ selectedApartment.id }}</strong>
-          <span>{{ selectedApartment.building }} · {{ selectedApartment.floor }} этаж · {{ selectedApartment.rooms }} комн. · {{ selectedApartment.area }} м²</span>
-          <span>{{ selectedApartment.view }} · {{ selectedApartment.layout }}</span>
-          <span v-if="selectedApartment.sold">{{ selectedApartment.manager }} · {{ selectedApartment.daysInWork }} дн. · {{ formatMoney(selectedApartment.salePrice) }} · скидка {{ formatMoney(selectedApartment.discount) }}</span>
-          <span v-else>В продаже · {{ formatMoney(selectedApartment.listPrice) }}</span>
-        </div>
-      </section>
-
-      <div class="two-col">
-        <section class="card section-card">
-          <div class="section-head compact"><div><p class="section-no">04 · Менеджеры</p><h2>Выручка, сделки, скидки</h2></div></div>
-          <p class="chart-hint">Позиция — выручка · размер круга — число сделок · цвет — доля скидки. Подпись справа: сделки · скидки.</p>
-          <ManagerChart :data="filtered" :selected="filters.manager" @select-manager="selectManager" />
+          <RevenueChart :data="filtered" :period="period"/>
         </section>
 
-        <section class="card section-card">
-          <div class="section-head compact">
-            <div><p class="section-no">05 · Ликвидность</p><h2>Что продаётся лучше</h2></div>
-            <select v-model="factor" class="factor-select">
-              <option value="view">Вид из окна</option>
-              <option value="building">Корпус</option>
-              <option value="rooms">Комнатность</option>
-              <option value="floor">Этаж</option>
-              <option value="area">Площадь</option>
-              <option value="price">Цена</option>
-              <option value="layout">Планировка</option>
-            </select>
-          </div>
-          <p class="chart-hint">Длина — количество квартир. Зелёная часть — продано, серая — в продаже; доля зелёного внутри строки показывает процент купленных квартир. Нажмите на строку, чтобы отфильтровать весь дашборд.</p>
-          <FeatureAnalysis :data="filtered" :factor="factor" @select-value="selectFeature" />
+        <section class="panel managers-panel">
+          <div class="panel-heading"><div><h2>Менеджеры</h2></div></div>
+          <ManagerTable :data="filtered" :selected="filters.manager" @select="selectManager"/>
         </section>
-      </div>
 
-      <footer>
-        Источник: учебный датасет ЖК «Облепиха». Важное ограничение: в данных нет всех обращений/лидов, поэтому нельзя честно сравнить конверсию менеджеров из обращения в сделку.
-      </footer>
+        <section class="panel matrix-panel">
+          <div class="panel-heading matrix-head">
+            <div><h2>Все квартиры объекта</h2></div>
+            <label class="inline-select"><span>цвет по</span><select v-model="matrixFactor"><option v-for="(def,key) in factorDefs" :key="key" :value="key">{{def.label}}</option></select></label>
+          </div>
+          <ApartmentMatrix :data="filtered" :factor="matrixFactor" :selected-id="selectedApartment?.id" @select="selectApartment"/>
+          <div v-if="selectedApartment" class="apartment-detail">
+            <strong>{{selectedApartment.id}}</strong>
+            <span>{{selectedApartment.building}} · {{selectedApartment.floor}} этаж · {{selectedApartment.rooms}} комн. · {{selectedApartment.area}} м²</span>
+            <span>{{selectedApartment.view}} · {{selectedApartment.layout}}</span>
+            <span v-if="selectedApartment.sold">{{selectedApartment.manager}} · {{selectedApartment.daysInWork}} дн. · {{moneyMln(selectedApartment.salePrice,1)}} · скидка {{moneyMln(selectedApartment.discount,1)}}</span>
+            <span v-else>в продаже · {{moneyMln(selectedApartment.listPrice,1)}}</span>
+          </div>
+        </section>
+
+        <section class="panel liquidity-panel">
+          <div class="panel-heading liquidity-head">
+            <div><h2>Что продаётся лучше</h2></div>
+            <div class="segmented">
+              <button :class="{active:liquidityMode==='count'}" @click="liquidityMode='count'">количество</button>
+              <button :class="{active:liquidityMode==='money'}" @click="liquidityMode='money'">млн ₽</button>
+            </div>
+          </div>
+          <LiquidityGrid :data="filtered" :mode="liquidityMode"/>
+        </section>
+      </main>
     </template>
-  </main>
+  </div>
 </template>

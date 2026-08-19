@@ -1,7 +1,7 @@
 {
   "name": "oblepikha-sales-dashboard",
+  "version": "2.0.0",
   "private": true,
-  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,11 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@vitejs/plugin-vue": "latest",
     "d3": "^7.9.0",
-    "vue": "^3.5.13"
+    "vite": "latest",
+    "vue": "^3.5.0"
   },
-  "devDependencies": {
-    "@vitejs/plugin-vue": "^5.2.1",
-    "vite": "^6.0.5"
-  }
+  "devDependencies": {}
 }
